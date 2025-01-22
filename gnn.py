@@ -1,448 +1,534 @@
-# import kgbench as kg
-# import torch
-# import torch.nn as nn
-# import torch_geometric
-# from torch_geometric.data import Data
-# import numpy as np
-# import pandas as pd
+# '''
+#     EDA of dmg777k dataset
+# '''
 # import matplotlib.pyplot as plt
+# import numpy as np
+# from kgbench import load
+# from collections import Counter, defaultdict
 # import seaborn as sns
-# from collections import Counter
-# from transformers import CLIPProcessor, CLIPModel
-# from transformers import BertTokenizer, BertModel
-# import torchvision.models as models
-# from torch_geometric.nn import GCNConv, SAGEConv, global_mean_pool
+# import torch
+# from typing import Tuple, List, Dict
+# import pandas as pd
 
-# # 1. Data Loading and EDA
-# def load_and_analyze_data(data):
-#     """
-#     Perform Exploratory Data Analysis on the dmg777k dataset
-#     """
-#     # Extract node types and counts
-#     node_types = Counter(data.node_types)
+# def analyze_splits(dataset):
+#     """Analyze available data splits in the dataset"""
+#     split_info = {}
     
-#     # Plot node type distribution
+#     # Check for different possible split attributes
+#     split_attributes = ['train_idx', 'val_idx', 'test_idx',
+#                        'train_mask', 'val_mask', 'test_mask']
+    
+#     for attr in split_attributes:
+#         if hasattr(dataset, attr):
+#             if isinstance(getattr(dataset, attr), torch.Tensor):
+#                 split_info[attr] = len(getattr(dataset, attr))
+#             elif isinstance(getattr(dataset, attr), np.ndarray):
+#                 split_info[attr] = len(getattr(dataset, attr))
+#             else:
+#                 split_info[attr] = sum(getattr(dataset, attr))
+    
+#     return split_info
+
+# def analyze_triples(dataset) -> Tuple[Dict, Dict]:
+#     """Analyze the triples in the dataset"""
+#     if not hasattr(dataset, 'triples'):
+#         return {}, {}
+    
+#     # Analyze subject-predicate-object patterns
+#     relation_patterns = defaultdict(int)
+#     entity_roles = defaultdict(lambda: {'subject': 0, 'object': 0})
+    
+#     for s, p, o in dataset.triples:
+#         # Convert to integers if they're tensors
+#         s = s.item() if isinstance(s, torch.Tensor) else s
+#         p = p.item() if isinstance(p, torch.Tensor) else p
+#         o = o.item() if isinstance(o, torch.Tensor) else o
+        
+#         # Get entity types if possible
+#         s_type = type(dataset.i2e[s]).__name__ if s < len(dataset.i2e) else 'Unknown'
+#         o_type = type(dataset.i2e[o]).__name__ if o < len(dataset.i2e) else 'Unknown'
+        
+#         pattern = f"{s_type} --[{p}]--> {o_type}"
+#         relation_patterns[pattern] += 1
+        
+#         entity_roles[s]['subject'] += 1
+#         entity_roles[o]['object'] += 1
+    
+#     return dict(relation_patterns), dict(entity_roles)
+
+# def analyze_node_information(dataset) -> Dict:
+#     """Analyze information available per node"""
+#     node_info = {}
+    
+#     # Check for node features
+#     if hasattr(dataset, 'x') and dataset.x is not None:
+#         node_info['features'] = {
+#             'shape': dataset.x.shape,
+#             'type': dataset.x.dtype,
+#             'sparse': isinstance(dataset.x, torch.sparse.Tensor)
+#         }
+    
+#     # Check for node labels
+#     if hasattr(dataset, 'y') and dataset.y is not None:
+#         node_info['labels'] = {
+#             'shape': dataset.y.shape,
+#             'unique_labels': len(torch.unique(dataset.y)),
+#             'type': dataset.y.dtype
+#         }
+    
+#     return node_info
+
+# def plot_entity_distribution(dataset):
+#     """Plot the distribution of entity types"""
+#     entity_types = defaultdict(int)
+    
+#     for entity in dataset.i2e:
+#         if isinstance(entity, tuple):
+#             entity_type = entity[1] if len(entity) > 1 else 'untyped_literal'
+#         else:
+#             entity_type = type(entity).__name__
+#         entity_types[entity_type] += 1
+    
 #     plt.figure(figsize=(12, 6))
-#     plt.bar(node_types.keys(), node_types.values())
-#     plt.title('Distribution of Node Types')
-#     plt.xticks(rotation=45)
+#     plt.bar(entity_types.keys(), entity_types.values(), color='skyblue')
+#     plt.xticks(rotation=45, ha='right')
+#     plt.title('Distribution of Entity Types')
+#     plt.ylabel('Count')
 #     plt.tight_layout()
+#     plt.show()
+
+# def plot_edge_distribution(dataset):
+#     """Plot the distribution of edge types"""
+#     if not hasattr(dataset, 'triples'):
+#         print("No triples found in dataset")
+#         return
     
-#     # Extract edge types and counts
-#     edge_types = Counter(data.edge_types)
+#     edge_types = Counter([p.item() if isinstance(p, torch.Tensor) else p 
+#                          for _, p, _ in dataset.triples])
     
-#     # Plot edge type distribution
 #     plt.figure(figsize=(12, 6))
-#     plt.bar(edge_types.keys(), edge_types.values())
+#     sns.barplot(x=list(range(len(edge_types))), 
+#                y=list(edge_types.values()),
+#                color='lightgreen')
+#     plt.xlabel('Edge Type ID')
+#     plt.ylabel('Count')
 #     plt.title('Distribution of Edge Types')
-#     plt.xticks(rotation=45)
 #     plt.tight_layout()
-    
-#     # Analyze node attributes
-#     print("Node attributes available:", data.node_features.keys())
-#     print("Number of nodes:", len(data.nodes))
-#     print("Number of edges:", len(data.triples))
-    
-#     return node_types, edge_types
+#     plt.show()
 
-# # 2. Feature Extraction
-# class FeatureExtractor:
-#     def __init__(self):
-#         # Initialize CLIP for vision features
-#         self.clip_model = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-#         self.clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        
-#         # Initialize BERT for text features
-#         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-#         self.bert = BertModel.from_pretrained('bert-base-uncased')
-        
-#     def extract_image_features(self, image):
-#         """Extract features from images using CLIP"""
-#         inputs = self.clip_model(images=image, return_tensors="pt")
-#         image_features = self.clip.get_image_features(**inputs)
-#         return image_features
+# def plot_entity_roles(entity_roles):
+#     """Plot the distribution of entity roles (subject vs object)"""
+#     if not entity_roles:
+#         return
     
-#     def extract_text_features(self, text):
-#         """Extract features from text using BERT"""
-#         inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True)
-#         outputs = self.bert(**inputs)
-#         return outputs.last_hidden_state[:, 0, :]  # Use [CLS] token
-
-# # 3. GNN Model
-# class MultimodalGNN(nn.Module):
-#     def __init__(self, node_feature_dim, num_classes, hidden_dim=256):
-#         super(MultimodalGNN, self).__init__()
-        
-#         # GNN layers
-#         self.conv1 = GCNConv(node_feature_dim, hidden_dim)
-#         self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        
-#         # Classification head
-#         self.classifier = nn.Sequential(
-#             nn.Linear(hidden_dim, hidden_dim // 2),
-#             nn.ReLU(),
-#             nn.Dropout(0.5),
-#             nn.Linear(hidden_dim // 2, num_classes)
-#         )
-        
-#     def forward(self, x, edge_index):
-#         # Graph convolutions
-#         x = self.conv1(x, edge_index)
-#         x = torch.relu(x)
-#         x = self.conv2(x, edge_index)
-        
-#         # Classification
-#         out = self.classifier(x)
-#         return out
-
-# # 4. Training Pipeline
-# def train_model(model, data, optimizer, criterion, num_epochs=100):
-#     model.train()
+#     # Prepare data for plotting
+#     subjects = [roles['subject'] for roles in entity_roles.values()]
+#     objects = [roles['object'] for roles in entity_roles.values()]
     
-#     for epoch in range(num_epochs):
-#         optimizer.zero_grad()
-        
-#         # Forward pass
-#         out = model(data.x, data.edge_index)
-#         loss = criterion(out[data.train_mask], data.y[data.train_mask])
-        
-#         # Backward pass
-#         loss.backward()
-#         optimizer.step()
-        
-#         # Validation
-#         if epoch % 10 == 0:
-#             model.eval()
-#             with torch.no_grad():
-#                 val_out = model(data.x, data.edge_index)
-#                 val_loss = criterion(val_out[data.val_mask], data.y[data.val_mask])
-                
-#                 # Calculate accuracy
-#                 pred = val_out[data.val_mask].argmax(dim=1)
-#                 correct = pred.eq(data.y[data.val_mask]).sum().item()
-#                 acc = correct / data.val_mask.sum().item()
-                
-#                 print(f'Epoch {epoch:03d}, Loss: {loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {acc:.4f}')
-#             model.train()
+#     plt.figure(figsize=(12, 6))
+#     plt.scatter(subjects, objects, alpha=0.5)
+#     plt.xlabel('Times used as Subject')
+#     plt.ylabel('Times used as Object')
+#     plt.title('Entity Usage as Subject vs Object')
+#     plt.tight_layout()
+#     plt.show()
 
-# # 5. Main execution
 # def main():
 #     # Load dataset
-#     data = kg.load('dmg777k')
+#     print("Loading DMG777K dataset...")
+#     dataset = load('dmg777k')
     
-#     # Perform EDA
-#     node_types, edge_types = load_and_analyze_data(data)
+#     # Print all available attributes
+#     print("\n=== Available Dataset Attributes ===")
+#     for attr in dir(dataset):
+#         # if not attr.startswith('_'):
+#         print(f"- {attr}")
     
-#     # Initialize feature extractor
-#     feature_extractor = FeatureExtractor()
+#     # 1. Entity Analysis
+#     print("\n=== Entity Analysis ===")
+#     if hasattr(dataset, 'i2e'):
+#         print(f"Total number of entities: {len(dataset.i2e)}")
+#         plot_entity_distribution(dataset)
     
-#     # Process nodes and extract features
-#     node_features = []
-#     for node in data.nodes:
-#         if node['type'] == 'image':
-#             features = feature_extractor.extract_image_features(node['image'])
-#         else:
-#             features = feature_extractor.extract_text_features(node['text'])
-#         node_features.append(features)
+#     # 2. Edge Analysis
+#     print("\n=== Edge Analysis ===")
+#     if hasattr(dataset, 'triples'):
+#         print(f"Total number of triples: {len(dataset.triples)}")
+#         print(f"Number of relation types: {dataset.num_relations}")
+#         plot_edge_distribution(dataset)
     
-#     # Convert to PyG Data object
-#     x = torch.stack(node_features)
-#     edge_index = torch.tensor(data.edge_index)
-#     y = torch.tensor(data.labels)
+#     # 3. Node Information Analysis
+#     print("\n=== Node Information Analysis ===")
+#     node_info = analyze_node_information(dataset)
+#     for key, value in node_info.items():
+#         print(f"\n{key.capitalize()} information:")
+#         for k, v in value.items():
+#             print(f"- {k}: {v}")
     
-#     # Create and train model
-#     model = MultimodalGNN(
-#         node_feature_dim=node_features[0].shape[1],
-#         num_classes=len(set(data.labels))
-#     )
+#     # 4. Triple Analysis
+#     print("\n=== Triple Analysis ===")
+#     relation_patterns, entity_roles = analyze_triples(dataset)
     
-#     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-#     criterion = nn.CrossEntropyLoss()
+#     print("\nTop 10 relation patterns:")
+#     for pattern, count in sorted(relation_patterns.items(), 
+#                                key=lambda x: x[1], reverse=True)[:10]:
+#         print(f"- {pattern}: {count}")
     
-#     # Train the model
-#     train_model(model, Data(x=x, edge_index=edge_index, y=y), optimizer, criterion)
+#     # Plot entity roles
+#     if entity_roles:
+#         plot_entity_roles(entity_roles)
+    
+#     # 5. Entity to Index Mapping Analysis
+#     print("\n=== Entity-Index Mapping Analysis ===")
+#     if hasattr(dataset, 'i2e'):
+#         print(f"Number of mappings in i2e: {len(dataset.i2e)}")
+#     if hasattr(dataset, 'e2i'):
+#         print(f"Number of mappings in e2i: {len(dataset.e2i)}")
+    
+#     # 6. Data Split Analysis
+#     print("\n=== Data Split Information ===")
+#     split_info = analyze_splits(dataset)
+#     if split_info:
+#         for split_name, size in split_info.items():
+#             print(f"{split_name}: {size}")
+#     else:
+#         print("No standard split information found")
+        
+#         # Check for custom split attributes
+#         custom_splits = [attr for attr in dir(dataset) 
+#                         if any(x in attr.lower() for x in ['train', 'test', 'val', 'split'])]
+#         if custom_splits:
+#             print("\nFound custom split attributes:")
+#             for split in custom_splits:
+#                 value = getattr(dataset, split)
+#                 if isinstance(value, (torch.Tensor, np.ndarray, list)):
+#                     print(f"- {split}: {len(value)} items")
+#                 else:
+#                     print(f"- {split}: {type(value)}")
+    
+#     # 7. GNN Training Considerations
+#     print("\n=== GNN Training Considerations ===")
+#     print("1. Graph Structure:")
+#     if hasattr(dataset, 'triples'):
+#         print(f"- Using {len(dataset.triples)} triples to construct the graph")
+#         print("- Consider using a relation-aware GNN to leverage edge types")
+    
+#     print("\n2. Node Features:")
+#     if hasattr(dataset, 'x') and dataset.x is not None:
+#         print(f"- Input feature dimension: {dataset.x.shape[1]}")
+#         print("- Features are available for GNN input")
+#     else:
+#         print("- No node features found")
+#         print("- Consider using:")
+#         print("  * One-hot encodings")
+#         print("  * Positional encodings")
+#         print("  * Pre-trained entity embeddings")
+    
+#     print("\n3. Training Setup:")
+#     if split_info:
+#         print("- Use provided data splits for training")
+#     else:
+#         print("- Need to create custom train/val/test splits")
+#         print("- Consider using stratified sampling if task is classification")
+    
+#     if hasattr(dataset, 'y') and dataset.y is not None:
+#         print(f"\n4. Task Type:")
+#         print(f"- Classification task with {len(torch.unique(dataset.y))} classes")
+#         print("- Consider using:")
+#         print("  * Cross entropy loss")
+#         print("  * Class weights if distribution is imbalanced")
+    
+#     # Save summary statistics
+#     summary_stats = {
+#         'total_entities': len(dataset.i2e) if hasattr(dataset, 'i2e') else 0,
+#         'total_relations': dataset.num_relations if hasattr(dataset, 'num_relations') else 0,
+#         'total_triples': len(dataset.triples) if hasattr(dataset, 'triples') else 0
+#     }
+    
+#     if split_info:
+#         summary_stats.update(split_info)
+    
+#     pd.DataFrame([summary_stats]).to_csv('dmg777k_summary_stats.csv', index=False)
 
 # if __name__ == "__main__":
 #     main()
 
-import kgbench as kg
+"""
+Multimodal GNN for Node Classification with Embedding Caching
+"""
+
 import torch
 import torch.nn as nn
-import torch_geometric
+import torch.nn.functional as F
+from torch_geometric.nn import GATConv
 from torch_geometric.data import Data
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from collections import Counter
 from transformers import CLIPProcessor, CLIPModel
-from transformers import BertTokenizer, BertModel
-from torch_geometric.nn import GCNConv, global_mean_pool
-from typing import Optional, Union, List
-import gc
+from transformers import DistilBertModel, DistilBertTokenizer
+import torchvision.transforms as transforms
+from sklearn.decomposition import PCA
+import numpy as np
+import tqdm
+import logging
+import os
+import pickle
+import hashlib
+from datetime import datetime
+from kgbench import load, tic, toc
+import fire
 
-MAX_ENTITIES = 40000  # Reduced to 4000 entities
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-class FeatureExtractor:
-    def __init__(self, feature_dim: int = 768):
-        self.feature_dim = feature_dim
-        print("Initializing feature extractors...")
+class MultimodalEncoder(nn.Module):
+    def __init__(self, output_dim, device='cuda'):
+        super().__init__()
+        self.device = device
+        self.output_dim = output_dim
+        
+        logger.info("Initializing CLIP model...")
+        self.clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         self.clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-        self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        self.bert = BertModel.from_pretrained('bert-base-uncased')
         
-    def extract_batch_features(self, entity_ids: List[int], data, batch_size: int = 32) -> torch.Tensor:
-        """Extract features for a batch of entities"""
-        entity_ids = entity_ids[:MAX_ENTITIES]
-        features = []
+        logger.info("Initializing DistilBERT model...")
+        self.bert = DistilBertModel.from_pretrained('distilbert-base-uncased').to(device)
+        self.bert_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
         
-        for i in range(0, len(entity_ids), batch_size):
-            batch_ids = entity_ids[i:i + batch_size]
-            batch_features = []
-            
-            try:
-                strings = data.get_strings_batch(batch_ids, dtype=str)
-                images = None
-                if not any(strings):
-                    images = data.get_images_batch(batch_ids)
-            except Exception as e:
-                print(f"Error fetching batch data for entities {batch_ids[0]}-{batch_ids[-1]}: {e}")
-                strings = [None] * len(batch_ids)
-                images = None
-            
-            for idx, entity_id in enumerate(batch_ids):
-                try:
-                    if strings and strings[idx]:
-                        feat = self.extract_text_features(strings[idx])
-                    elif images and images[idx] is not None:
-                        feat = self.extract_image_features(images[idx])
-                    else:
-                        feat = torch.zeros(self.feature_dim)
-                except Exception as e:
-                    print(f"Error processing entity {entity_id}: {e}")
-                    feat = torch.zeros(self.feature_dim)
-                
-                batch_features.append(feat)
-            
-            del strings
-            del images
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()
-            
-            features.extend(batch_features)
-            
-            if (i + batch_size) % 1000 == 0:
-                print(f"Processed {min(i + batch_size, MAX_ENTITIES)}/{MAX_ENTITIES} entities...")
+        self.clip_projection = nn.Linear(512, output_dim).to(device)
+        self.bert_projection = nn.Linear(768, output_dim).to(device)
+        self.iri_embedding = nn.Embedding(10000, output_dim).to(device)
         
-        return torch.stack([f.detach() for f in features])
+        self.pca = PCA(n_components=output_dim)
     
-    def extract_image_features(self, image) -> torch.Tensor:
-        if image is None:
-            return torch.zeros(self.feature_dim)
-        
-        with torch.no_grad():
-            try:
-                inputs = self.clip_processor(images=image, return_tensors="pt")
-                image_features = self.clip_model.get_image_features(**inputs)
-                return image_features.mean(dim=0)[:self.feature_dim]
-            except Exception as e:
-                print(f"Error processing image: {e}")
-                return torch.zeros(self.feature_dim)
+    @torch.no_grad()
+    def encode_images(self, images, batch_size=16):
+        embeddings = []
+        for i in tqdm.tqdm(range(0, len(images), batch_size), desc="Encoding images"):
+            batch = images[i:i + batch_size]
+            inputs = self.clip_processor(images=batch, return_tensors="pt", padding=True)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            image_features = self.clip.get_image_features(**inputs)
+            embeddings.append(self.clip_projection(image_features).cpu())
+        return torch.cat(embeddings, dim=0)
     
-    def extract_text_features(self, text: str) -> torch.Tensor:
-        if not text or not isinstance(text, str):
-            return torch.zeros(self.feature_dim)
-        
-        with torch.no_grad():
-            try:
-                inputs = self.tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                outputs = self.bert(**inputs)
-                return outputs.last_hidden_state[:, 0, :].squeeze()[:self.feature_dim]
-            except Exception as e:
-                print(f"Error processing text: {e}")
-                return torch.zeros(self.feature_dim)
-
-def process_dataset(data, batch_size=32):
-    """Process the dataset and extract features with improved entity handling"""
-    print("Analyzing dataset structure...")
-    print(f"Total number of entities: {data.num_entities}")
-    print(f"Number of relations: {data.num_relations}")
-    
-    # Analyze triple structure
-    min_head, max_head, min_tail, max_tail = analyze_triples(data)
-    
-    # Adjust MAX_ENTITIES based on the actual entity distribution
-    global MAX_ENTITIES
-    suggested_max = max(max_head, max_tail) + 1
-    if suggested_max > MAX_ENTITIES:
-        print(f"\nWarning: Current MAX_ENTITIES ({MAX_ENTITIES}) is too low.")
-        print(f"Adjusting MAX_ENTITIES to {suggested_max} to include all entities")
-        print("Felfnejbf",MAX_ENTITIES)
-        MAX_ENTITIES = suggested_max
-    
-    print(f"\nProcessing first {MAX_ENTITIES} entities")
-    
-    feature_extractor = FeatureExtractor()
-    entity_ids = list(range(min(data.num_entities, MAX_ENTITIES)))
-    
-    print("Extracting features...")
-    features = feature_extractor.extract_batch_features(entity_ids, data, batch_size=batch_size)
-    
-    print("Creating graph structure...")
-    filtered_triples = [t for t in data.triples if t[0] < MAX_ENTITIES and t[2] < MAX_ENTITIES]
-    
-    if not filtered_triples:
-        raise ValueError("No valid triples found after filtering. Check entity ID distribution in triples.")
-    
-    print(f"Number of filtered triples: {len(filtered_triples)}")
-    print(f"Sample of first 5 triples: {filtered_triples[:5]}")
-    
-    edge_index = torch.tensor([[t[0], t[2]] for t in filtered_triples]).t().contiguous()
-    edge_type = torch.tensor([t[1] for t in filtered_triples])
-    
-    print(f"Edge index shape: {edge_index.shape}")
-    print(f"Edge type shape: {edge_type.shape}")
-    
-    print("Creating labels...")
-    labels = torch.zeros(MAX_ENTITIES, dtype=torch.long)
-    
-    # Create train/val masks
-    train_mask = torch.zeros(MAX_ENTITIES, dtype=torch.bool)
-    val_mask = torch.zeros(MAX_ENTITIES, dtype=torch.bool)
-    
-    # Split 80/20 for train/val
-    num_train = int(0.8 * MAX_ENTITIES)
-    train_mask[:num_train] = True
-    val_mask[num_train:] = True
-    
-    print("Preparing PyG data object...")
-    pyg_data = Data(
-        x=features,
-        edge_index=edge_index,
-        edge_type=edge_type,
-        y=labels,
-        train_mask=train_mask,
-        val_mask=val_mask
-    )
-    
-    print("\nFinal data object validation:")
-    print(f"Number of nodes: {pyg_data.num_nodes}")
-    print(f"Number of edges: {pyg_data.num_edges}")
-    print(f"Feature matrix shape: {pyg_data.x.shape}")
-    print(f"Edge index shape: {pyg_data.edge_index.shape}")
-    print(f"Edge type shape: {pyg_data.edge_type.shape}")
-    
-    return pyg_data
+    @torch.no_grad()
+    def encode_text(self, texts, batch_size=32):
+        embeddings = []
+        for i in tqdm.tqdm(range(0, len(texts), batch_size), desc="Encoding text"):
+            batch = texts[i:i + batch_size]
+            inputs = self.bert_tokenizer(batch, return_tensors="pt", padding=True, truncation=True)
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            text_features = self.bert(**inputs).last_hidden_state[:, 0]
+            embeddings.append(self.bert_projection(text_features).cpu())
+        return torch.cat(embeddings, dim=0)
 
 class MultimodalGNN(nn.Module):
-    def __init__(self, feature_dim, num_relations, num_classes=2, hidden_dim=256):
-        super(MultimodalGNN, self).__init__()
-        
-        self.feature_dim = feature_dim
-        self.num_relations = num_relations
-        
-        # Relation embeddings
-        self.relation_embedding = nn.Embedding(num_relations, hidden_dim)
-        
-        # GNN layers
-        self.conv1 = GCNConv(feature_dim, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, hidden_dim)
-        
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(hidden_dim // 2, num_classes)
-        )
+    def __init__(self, input_dim, hidden_dim, num_classes, num_heads=4, dropout=0.1):
+        super().__init__()
+        self.gat1 = GATConv(input_dim, hidden_dim, heads=num_heads, dropout=dropout)
+        self.gat2 = GATConv(hidden_dim * num_heads, hidden_dim, heads=1, dropout=dropout)
+        self.output = nn.Linear(hidden_dim, num_classes)
+        self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x, edge_index, edge_type):
-        x = self.conv1(x, edge_index)
-        x = torch.relu(x)
-        
-        edge_embeddings = self.relation_embedding(edge_type)
-        x = x + torch.index_select(edge_embeddings, 0, edge_index[1])
-        
-        x = self.conv2(x, edge_index)
-        
-        out = self.classifier(x)
-        return out
+    def forward(self, x, edge_index):
+        x = self.dropout(x)
+        x = F.elu(self.gat1(x, edge_index))
+        x = self.dropout(x)
+        x = self.gat2(x, edge_index)
+        return self.output(x)
 
-def train_model(model, data, optimizer, criterion, device, num_epochs=100):
-    model.train()
+class DMGDataProcessor:
+    def __init__(self, data, output_dim=64, device='cuda', cache_dir='cached_embeddings'):
+        self.data = data
+        self.output_dim = output_dim
+        self.device = device
+        self.cache_dir = cache_dir
+        self.encoder = MultimodalEncoder(output_dim, device)
+        os.makedirs(cache_dir, exist_ok=True)
+    
+    def get_cache_path(self, datatype):
+        hash_input = f"{datatype}_{self.output_dim}"
+        filename = hashlib.md5(hash_input.encode()).hexdigest()
+        return os.path.join(self.cache_dir, f"{filename}.pkl")
+    
+    def load_cached_embeddings(self, datatype):
+        cache_path = self.get_cache_path(datatype)
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached embeddings for {datatype}")
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+        return None
+    
+    def save_embeddings(self, embeddings, datatype):
+        cache_path = self.get_cache_path(datatype)
+        logger.info(f"Caching embeddings for {datatype}")
+        with open(cache_path, 'wb') as f:
+            pickle.dump(embeddings, f)
+    
+    def process_node_type(self, dtype):
+        cached_embeddings = self.load_cached_embeddings(dtype)
+        if cached_embeddings is not None:
+            return cached_embeddings
+        
+        if dtype in ['iri', 'blank_node']:
+            strings = self.data.get_strings(dtype=dtype)
+            if strings:
+                logger.info(f"Processing {dtype} nodes...")
+                features = torch.randn(len(strings), self.output_dim)
+                self.save_embeddings(features, dtype)
+                return features
+        elif dtype == 'http://kgbench.info/dt#base64Image':
+            images = self.data.get_images()
+            if images:
+                logger.info("Processing image nodes...")
+                features = self.encoder.encode_images(images)
+                self.save_embeddings(features, dtype)
+                return features
+        else:
+            strings = self.data.get_strings(dtype=dtype)
+            if strings:
+                logger.info(f"Processing {dtype} nodes...")
+                features = self.encoder.encode_text(strings)
+                self.save_embeddings(features, dtype)
+                return features
+        return None
+    
+    def process_data(self):
+        logger.info("Processing DMG777k dataset...")
+        node_features = []
+        
+        datatypes = ['iri', 'blank_node', 'http://kgbench.info/dt#base64Image'] + \
+                   [dt for dt in self.data.datatypes() if dt not in ['iri', 'blank_node', 'http://kgbench.info/dt#base64Image']]
+        
+        for dtype in datatypes:
+            features = self.process_node_type(dtype)
+            if features is not None:
+                node_features.append(features)
+        
+        node_features = torch.cat(node_features, dim=0)
+        edge_index = torch.tensor(self.data.triples[:, [0, 2]], dtype=torch.long).t()
+        train_idx = torch.tensor(self.data.training[:, 0], dtype=torch.long)
+        val_idx = torch.tensor(self.data.withheld[:, 0], dtype=torch.long)
+        
+        num_nodes = node_features.size(0)
+        train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+        val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+        train_mask[train_idx] = True
+        val_mask[val_idx] = True
+        
+        labels = torch.zeros(num_nodes, dtype=torch.long)
+        labels[train_idx] = torch.tensor(self.data.training[:, 1], dtype=torch.long)
+        labels[val_idx] = torch.tensor(self.data.withheld[:, 1], dtype=torch.long)
+        
+        return Data(
+            x=node_features,
+            edge_index=edge_index,
+            y=labels,
+            train_mask=train_mask,
+            val_mask=val_mask
+        )
+
+def train(model, data, optimizer, device, epochs=100, patience=10):
+    model = model.to(device)
     data = data.to(device)
     
-    print("Training on device:", device)
+    best_val_acc = 0
+    best_epoch = 0
+    no_improve = 0
     
-    for epoch in range(num_epochs):
+    for epoch in range(epochs):
+        model.train()
         optimizer.zero_grad()
-        
-        out = model(data.x, data.edge_index, data.edge_type)
-        loss = criterion(out[data.train_mask], data.y[data.train_mask])
-        
+        out = model(data.x, data.edge_index)
+        loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
         loss.backward()
         optimizer.step()
         
+        val_acc = evaluate(model, data, data.val_mask)
+        
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch
+            no_improve = 0
+        else:
+            no_improve += 1
+        
+        if no_improve >= patience:
+            logger.info(f"Early stopping at epoch {epoch}")
+            break
+        
         if epoch % 10 == 0:
-            model.eval()
-            with torch.no_grad():
-                val_out = model(data.x, data.edge_index, data.edge_type)
-                val_loss = criterion(val_out[data.val_mask], data.y[data.val_mask])
-                
-                pred = val_out[data.val_mask].argmax(dim=1)
-                correct = pred.eq(data.y[data.val_mask]).sum().item()
-                acc = correct / data.val_mask.sum().item()
-                
-                print(f'Epoch {epoch:03d}, Train Loss: {loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {acc:.4f}')
-            model.train()
+            train_acc = evaluate(model, data, data.train_mask)
+            logger.info(f'Epoch {epoch:03d}, Loss: {loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')
+    
+    logger.info(f'Best validation accuracy: {best_val_acc:.4f} at epoch {best_epoch}')
+    return model
 
-def analyze_triples(data):
-    """Analyze the distribution of entity IDs in triples"""
-    head_entities = [t[0] for t in data.triples]
-    tail_entities = [t[2] for t in data.triples]
-    
-    print("\nTriple Analysis:")
-    print(f"Total number of triples: {len(data.triples)}")
-    print(f"Head entity ID range: {min(head_entities)} to {max(head_entities)}")
-    print(f"Tail entity ID range: {min(tail_entities)} to {max(tail_entities)}")
-    
-    # Count triples that would be filtered out
-    valid_triples = [t for t in data.triples if t[0] < MAX_ENTITIES and t[2] < MAX_ENTITIES]
-    print(f"Number of valid triples (with MAX_ENTITIES={MAX_ENTITIES}): {len(valid_triples)}")
-    
-    return min(head_entities), max(head_entities), min(tail_entities), max(tail_entities)
+@torch.no_grad()
+def evaluate(model, data, mask):
+    model.eval()
+    out = model(data.x, data.edge_index)
+    pred = out[mask].argmax(dim=1)
+    correct = pred.eq(data.y[mask]).sum().item()
+    return correct / mask.sum().item()
 
-def main():
-    print("Loading dataset...")
-    data = kg.load('dmg777k')
-    
-    batch_size = 16
-    
-    print(f"Processing dataset...")
-    try:
-        pyg_data = process_dataset(data, batch_size=batch_size)
-    except Exception as e:
-        print(f"Error during dataset processing: {e}")
-        return
-    
-    if pyg_data.num_edges == 0:
-        print("Error: Graph has no edges. Cannot proceed with training.")
-        return
-    
-    print("Initializing model...")
+def save_model(model, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    torch.save(model.state_dict(), path)
+    logger.info(f"Model saved to {path}")
+
+def main(
+    dataset='dmg777k',
+    hidden_dim=128,
+    output_dim=64,
+    num_heads=4,
+    dropout=0.1,
+    lr=0.001,
+    weight_decay=5e-4,
+    epochs=100,
+    patience=10,
+    save_dir='checkpoints',
+    cache_dir='cached_embeddings'
+):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info(f"Using device: {device}")
+    
+    logger.info(f"Loading {dataset} dataset...")
+    data = load(dataset)
+    
+    processor = DMGDataProcessor(data, output_dim=output_dim, device=device, cache_dir=cache_dir)
+    processed_data = processor.process_data()
+    
     model = MultimodalGNN(
-        feature_dim=768,
-        num_relations=data.num_relations
-    ).to(device)
+        input_dim=output_dim,
+        hidden_dim=hidden_dim,
+        num_classes=data.num_classes,
+        num_heads=num_heads,
+        dropout=dropout
+    )
     
-    print("Setting up training...")
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay
+    )
     
-    print("Starting training...")
-    train_model(model, pyg_data, optimizer, criterion, device)
+    logger.info("Starting training...")
+    tic()
+    model = train(model, processed_data, optimizer, device, epochs, patience)
+    training_time = toc()
+    logger.info(f"Training completed in {training_time:.2f} seconds")
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path = os.path.join(save_dir, f"model_{timestamp}.pt")
+    save_model(model, save_path)
+    
+    train_acc = evaluate(model, processed_data, processed_data.train_mask)
+    val_acc = evaluate(model, processed_data, processed_data.val_mask)
+    logger.info(f"Final results - Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
 
 if __name__ == "__main__":
-    main()
+    fire.Fire(main)
