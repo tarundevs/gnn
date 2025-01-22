@@ -83,7 +83,7 @@ Cache location: `cached_embeddings/`
 
 ## Results
 
-Training progress is displayed with a progress bar showing:
+Training progress is displayed, showing:
 - Current epoch
 - Loss value
 - Training accuracy
