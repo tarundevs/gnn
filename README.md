@@ -41,47 +41,6 @@ scikit-learn
 numpy
 ```
 
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/multimodal-gnn.git
-cd multimodal-gnn
-```
-
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-
-### Basic Usage
-
-Run the training script with default parameters:
-
-```bash
-python main.py
-```
-
-### Advanced Usage
-
-Customize training parameters:
-
-```bash
-python main.py \
-  --dataset dmg777k \
-  --hidden_dim 256 \
-  --output_dim 128 \
-  --num_layers 3 \
-  --num_heads 8 \
-  --dropout 0.3 \
-  --lr 0.0005 \
-  --weight_decay 1e-4 \
-  --epochs 200 \
-  --patience 20
-```
-
 ### Configuration Parameters
 
 | Parameter | Default | Description |
