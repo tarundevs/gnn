@@ -1,4 +1,3 @@
-
 import fire
 import sys
 import tqdm
@@ -20,18 +19,22 @@ import numpy as np
 
 from kgbench import load, tic, toc, d
 import kgbench as kg
+from pathlib import Path
+import json
+import pickle
+import os
 
 class EmbeddingCache:
-    def __init__(self, cache_dir='embedding_cache'):
+    def __init__(self, cache_dir='/content/drive/MyDrive/EmbeddingCache'):
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(exist_ok=True, parents=True)  # Ensure directory exists
         self.metadata_file = self.cache_dir / 'metadata.json'
-        self.embeddings_file = self.cache_dir / 'embeddings.pkl'
         self.load_metadata()
-        self.load_embeddings()
 
     def load_metadata(self):
+        """Load metadata from the JSON file."""
         if self.metadata_file.exists():
+            print("Loading metadata from file")
             with open(self.metadata_file, 'r') as f:
                 self.metadata = json.load(f)
         else:
@@ -39,53 +42,63 @@ class EmbeddingCache:
             self.save_metadata()
 
     def save_metadata(self):
+        """Save metadata to the JSON file."""
         with open(self.metadata_file, 'w') as f:
             json.dump(self.metadata, f)
 
-    def load_embeddings(self):
-        if self.embeddings_file.exists():
-            with open(self.embeddings_file, 'rb') as f:
-                self.embeddings = pickle.load(f)
-        else:
-            self.embeddings = {}
-            self.save_embeddings()
+    def get_embedding_filename(self, dtype, model_name):
+        """Generate a filename based on datatype and model name."""
+        dtype_clean = dtype.replace('http://kgbench.info/dt#', '').replace('@', '_').replace('/', '_')
+        filename = f"embeddings_{dtype_clean}_{model_name}.pkl"
+        return self.cache_dir / filename
 
-    def save_embeddings(self):
-        with open(self.embeddings_file, 'wb') as f:
-            pickle.dump(self.embeddings, f)
-
-    def get_hash(self, data_item, dtype):
-        if dtype == 'http://kgbench.info/dt#base64Image':
-            return hashlib.md5(data_item.tobytes()).hexdigest()
-        else:
-            return hashlib.md5(str(data_item).encode()).hexdigest()
-
-    def get_batch_hash(self, data_items, dtype):
-        combined_hash = hashlib.md5()
-        for item in data_items:
-            item_hash = self.get_hash(item, dtype)
-            combined_hash.update(item_hash.encode())
-        return combined_hash.hexdigest()
+    def get_metadata_key(self, dtype, model_name):
+        """Generate a metadata key based on datatype and model name."""
+        return f"{dtype}_{model_name}"
 
     def get_cached_embeddings(self, data_items, dtype, model_name):
-        batch_hash = self.get_batch_hash(data_items, dtype)
-        if batch_hash in self.embeddings:
-            return self.embeddings[batch_hash]
+        """Retrieve cached embeddings if they exist."""
+        embedding_file = self.get_embedding_filename(dtype, model_name)
+        metadata_key = self.get_metadata_key(dtype, model_name)
+        print("*" * 199)
+        print(f"Checking cache: {embedding_file}, Key: {metadata_key}")
+        print("*" * 199)
+
+        if embedding_file.exists() and metadata_key in self.metadata:
+            print(f"Loading cached embeddings from {embedding_file}")
+            with open(embedding_file, 'rb') as f:
+                embeddings = pickle.load(f)
+            # Verify the number of items matches
+            if self.metadata[metadata_key]['num_items'] == len(data_items):
+                print(f"Using cached embeddings for dtype {dtype}")
+                return embeddings
+            else:
+                print(f"Cached embeddings found but item count mismatch: "
+                      f"{self.metadata[metadata_key]['num_items']} vs {len(data_items)}")
+                return None
+        print(f"No cached embeddings found for dtype {dtype}")
         return None
 
     def cache_embeddings(self, embeddings, data_items, dtype, model_name):
-        batch_hash = self.get_batch_hash(data_items, dtype)
-        self.embeddings[batch_hash] = embeddings
-        self.save_embeddings()
+        """Save embeddings to a file and update metadata."""
+        embedding_file = self.get_embedding_filename(dtype, model_name)
+        metadata_key = self.get_metadata_key(dtype, model_name)
 
-        self.metadata[batch_hash] = {
+        # Save embeddings
+        with open(embedding_file, 'wb') as f:
+            pickle.dump(embeddings, f)
+        print(f"Saved embeddings to {embedding_file}")
+
+        # Update metadata
+        self.metadata[metadata_key] = {
             'dtype': dtype,
             'model': model_name,
             'num_items': len(data_items),
             'embedding_shape': list(embeddings.shape),
-            'created': str(Path(self.embeddings_file).stat().st_mtime)
+            'created': str(embedding_file.stat().st_mtime)
         }
         self.save_metadata()
+        print(f"Updated metadata for {metadata_key}")
 
 def enrich(triples: torch.Tensor, n: int, r: int):
     cuda = triples.is_cuda
@@ -141,7 +154,7 @@ def adj(triples, num_nodes, num_rels, cuda=False, vertical=True):
 
     return indices.t(), size
 class RGCN(nn.Module):
-    def __init__(self, triples, n, r, emb, hidden, numcls, bases=None):
+    def __init__(self, triples, n, r, emb, hidden, numcls,dropout_general=0.2,dropout_feature=0.1, bases=None):
         """
         Fixed RGCN initialization with correct parameter names
 
@@ -162,8 +175,8 @@ class RGCN(nn.Module):
         self.numcls = numcls
 
         # Dropout layers
-        self.dropout = nn.Dropout(0.2)
-        self.feature_dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout_general)
+        self.feature_dropout = nn.Dropout(dropout_feature)
 
         # Layer normalization
         self.layer_norm1 = nn.LayerNorm(hidden)
@@ -383,7 +396,7 @@ def pca(tensor, target_dim):
     # Move back to original device
     return res.to(device)
 
-def compute_embeddings_with_cache(data, emb_dim, cache_dir='embedding_cache'):
+def compute_embeddings_with_cache(data, emb_dim, cache_dir='/content/drive/MyDrive/EmbeddingCache'):
     cache = EmbeddingCache(cache_dir)
     embeddings = []
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -395,48 +408,43 @@ def compute_embeddings_with_cache(data, emb_dim, cache_dir='embedding_cache'):
             if datatype in ['iri', 'blank_node']:
                 print(f'Initializing embedding for datatype {datatype}.')
                 n = len(data.get_strings(dtype=datatype))
-                # Create random embeddings directly on the correct device
                 nodes = torch.randn(n, emb_dim, device=device)
                 embeddings.append(nodes)
 
             elif datatype == 'http://kgbench.info/dt#base64Image':
                 print(f'Computing/loading embeddings for images.')
                 images = data.get_images()
-                cached_emb = cache.get_cached_embeddings(images, datatype, 'clip-vit-b-32')
+                model_name = 'clip-vit-b-32'
+                cached_emb = cache.get_cached_embeddings(images, datatype, model_name)
 
                 if cached_emb is not None:
-                    print("Using cached image embeddings")
                     image_embeddings = cached_emb.to(device)
                 else:
                     print(f"Computing CLIP embeddings for {len(images)} images")
                     image_embeddings = clip_emb(images, bs=8)
                     print("Caching image embeddings")
-                    cache.cache_embeddings(image_embeddings.cpu(), images, datatype, 'clip-vit-b-32')
+                    cache.cache_embeddings(image_embeddings.cpu(), images, datatype, model_name)
                     image_embeddings = image_embeddings.to(device)
 
                 image_embeddings = pca(image_embeddings, target_dim=emb_dim)
-                # Ensure PCA output is on the correct device
-                image_embeddings = image_embeddings.to(device)
                 embeddings.append(image_embeddings)
 
             else:
                 print(f'Computing/loading embeddings for datatype {datatype}.')
                 strings = data.get_strings(dtype=datatype)
-                cached_emb = cache.get_cached_embeddings(strings, datatype, MNAME)
+                model_name = 'distilbert-base-cased'
+                cached_emb = cache.get_cached_embeddings(strings, datatype, model_name)
 
                 if cached_emb is not None:
-                    print("Using cached text embeddings")
                     string_embeddings = cached_emb.to(device)
                 else:
                     print(f"Computing BERT embeddings for {len(strings)} strings")
                     string_embeddings = bert_emb(strings)
                     print("Caching text embeddings")
-                    cache.cache_embeddings(string_embeddings.cpu(), strings, datatype, MNAME)
+                    cache.cache_embeddings(string_embeddings.cpu(), strings, datatype, model_name)
                     string_embeddings = string_embeddings.to(device)
 
                 string_embeddings = pca(string_embeddings, target_dim=emb_dim)
-                # Ensure PCA output is on the correct device
-                string_embeddings = string_embeddings.to(device)
                 embeddings.append(string_embeddings)
 
         except Exception as e:
@@ -444,12 +452,10 @@ def compute_embeddings_with_cache(data, emb_dim, cache_dir='embedding_cache'):
             raise
 
         finally:
-            # Clean up after each datatype
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             gc.collect()
 
-    # Before concatenating, verify all tensors are on the same device
     print("Verifying device consistency...")
     for i, emb in enumerate(embeddings):
         if emb.device != device:
@@ -458,9 +464,9 @@ def compute_embeddings_with_cache(data, emb_dim, cache_dir='embedding_cache'):
 
     return torch.cat(embeddings, dim=0)
 
-def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
-       optimizer='adam', final=False, emb=16, bases=40,
-       cache_dir='embedding_cache', imagebatch=8,
+def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune=True,
+       optimizer='adam', final=False, emb=16,dropout_general=0.2,dropout_feature=0.1,label_smoothing=0.1, bases=40,
+       cache_dir='/content/drive/MyDrive/EmbeddingCache', imagebatch=8,
        stringbatch=5_000,
        printnorms=None):
 
@@ -516,6 +522,8 @@ def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
         emb=emb,  # Changed from insize to emb
         hidden=emb,
         numcls=data.num_classes,
+        dropout_general=dropout_general,
+        dropout_feature=dropout_feature,
         bases=bases
     )
 
@@ -537,7 +545,13 @@ def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
         raise ValueError(f'Unknown optimizer: {optimizer}')
 
     # Add a learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=1, gamma=0.1)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    opt,
+    mode='min',
+    factor=0.5,
+    patience=patience,
+    verbose=True
+)
 
     # Training loop
     best_withheld_acc = 0
@@ -558,7 +572,7 @@ def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
 
         # Compute loss
         out_train = out[idxt, :]
-        loss = F.cross_entropy(out_train, clst, reduction='mean')
+        loss = F.cross_entropy(out_train, clst, reduction='mean',label_smoothing=label_smoothing)
         if l2 != 0.0:
             loss = loss + l2 * rgcn.penalty()
 
@@ -582,8 +596,7 @@ def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
         opt.step()
 
         # Step the scheduler after the 500th epoch
-        if e >= 500:
-            scheduler.step()
+        scheduler.step(loss)
 
         print(f'Epoch {e:02d}: loss {loss:.4f}, train acc {training_acc:.4f}, '
               f'valid acc {withheld_acc:.4f} ({toc():.2f}s)')
@@ -602,4 +615,23 @@ def go(name='dmg777k', lr=0.005, wd=5e-2, l2=5e-2, epochs=5000, prune=True,
 
     return best_withheld_acc
 
-go()
+if __name__=="__main__":
+    go(   name='dmg777k',
+          patience=5,
+          lr=0.005,
+          wd=1e-2,
+          l2=1e-2,
+          epochs=500,
+          prune=True,
+          optimizer='adamw',
+          final=False,
+          emb=16,
+          dropout_general=0.1,
+          dropout_feature=0.1,
+          label_smoothing=0.1,
+          bases=40,
+          cache_dir='/content/drive/MyDrive/EmbeddingCache',
+          imagebatch=8,
+          stringbatch=5_000,
+          printnorms=None
+           )
