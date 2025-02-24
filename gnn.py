@@ -556,7 +556,8 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
     # Training loop
     best_withheld_acc = 0
     best_state = None
-
+    early_stopping_patience = 20
+    patience_counter = 0
     print('\nStarting training...')
     for e in range(epochs):
         tic()
@@ -573,6 +574,10 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
         # Compute loss
         out_train = out[idxt, :]
         loss = F.cross_entropy(out_train, clst, reduction='mean',label_smoothing=label_smoothing)
+        with torch.no_grad():
+            out_valid = out[idxw, :]
+            val_loss = F.cross_entropy(out_valid, clsw, reduction='mean')
+
         if l2 != 0.0:
             loss = loss + l2 * rgcn.penalty()
 
@@ -598,9 +603,18 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
         # Step the scheduler after the 500th epoch
         scheduler.step(loss)
 
-        print(f'Epoch {e:02d}: loss {loss:.4f}, train acc {training_acc:.4f}, '
+        print(f'Epoch {e:02d}: loss {loss:.4f},val loss {val_loss:.4f}, train acc {training_acc:.4f}, '
               f'valid acc {withheld_acc:.4f} ({toc():.2f}s)')
 
+        # if withheld_acc > best_withheld_acc:
+        #     best_withheld_acc = withheld_acc
+        #     best_state = { ... }
+        #     patience_counter = 0
+        # else:
+        #     patience_counter += 1
+        # if patience_counter >= early_stopping_patience:
+        #     print(f"Early stopping at epoch {e}")
+        #     break
         # Clear cache periodically
         if e % 5 == 0:
             torch.cuda.empty_cache()
@@ -616,22 +630,23 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
     return best_withheld_acc
 
 if __name__=="__main__":
-    go(   name='dmg777k',
-          patience=5,
-          lr=0.005,
-          wd=1e-2,
-          l2=1e-2,
-          epochs=500,
-          prune=True,
-          optimizer='adamw',
-          final=False,
-          emb=16,
-          dropout_general=0.1,
-          dropout_feature=0.1,
-          label_smoothing=0.1,
-          bases=40,
-          cache_dir='/content/drive/MyDrive/EmbeddingCache',
-          imagebatch=8,
-          stringbatch=5_000,
-          printnorms=None
-           )
+    go(
+    name='dmg777k',
+    patience=5,  # Scheduler patience
+    lr=0.01,   # Adjusted
+    wd=0.005,
+    l2=0.005,     # Adjusted
+    epochs=500,
+    prune=True,
+    optimizer='adamw',
+    final=False,
+    emb=16,
+    dropout_general=0.1,  # Adjusted
+    dropout_feature=0.1,  # Adjusted
+    label_smoothing=0.6,
+    bases=40,
+    cache_dir='/content/drive/MyDrive/EmbeddingCache',
+    imagebatch=8,
+    stringbatch=5_000,
+    printnorms=None
+)
