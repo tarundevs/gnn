@@ -464,11 +464,10 @@ def compute_embeddings_with_cache(data, emb_dim, cache_dir='/content/drive/MyDri
 
     return torch.cat(embeddings, dim=0)
 
-def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune=True,
-       optimizer='adam', final=False, emb=16,dropout_general=0.2,dropout_feature=0.1,label_smoothing=0.1, bases=40,
+def go(name='dmg777k', patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune=True,
+       optimizer='adam', final=False, emb=16, dropout_general=0.2, dropout_feature=0.1, label_smoothing=0.1, bases=40,
        cache_dir='/content/drive/MyDrive/EmbeddingCache', imagebatch=8,
-       stringbatch=5_000,
-       printnorms=None):
+       stringbatch=5_000, printnorms=None):
 
     # Set default tensor type to float32
     torch.set_default_tensor_type(torch.FloatTensor)
@@ -546,12 +545,12 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
 
     # Add a learning rate scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    opt,
-    mode='min',
-    factor=0.5,
-    patience=patience,
-    verbose=True
-)
+        opt,
+        mode='min',
+        factor=0.75,
+        patience=patience,
+        verbose=True
+    )
 
     # Training loop
     best_withheld_acc = 0
@@ -573,7 +572,7 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
 
         # Compute loss
         out_train = out[idxt, :]
-        loss = F.cross_entropy(out_train, clst, reduction='mean',label_smoothing=label_smoothing)
+        loss = F.cross_entropy(out_train, clst, reduction='mean', label_smoothing=label_smoothing)
         with torch.no_grad():
             out_valid = out[idxw, :]
             val_loss = F.cross_entropy(out_valid, clsw, reduction='mean')
@@ -595,26 +594,29 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
                     'epoch': e,
                     'acc': withheld_acc
                 }
+                patience_counter = 0  # Reset early stopping counter
+            else:
+                patience_counter += 0
 
         # Backward pass and optimization
         loss.backward()
         opt.step()
 
-        # Step the scheduler after the 500th epoch
+        # Step the scheduler based on training loss
         scheduler.step(loss)
 
-        print(f'Epoch {e:02d}: loss {loss:.4f},val loss {val_loss:.4f}, train acc {training_acc:.4f}, '
-              f'valid acc {withheld_acc:.4f} ({toc():.2f}s)')
+        # Get current learning rate
+        current_lr = opt.param_groups[0]['lr']
 
-        # if withheld_acc > best_withheld_acc:
-        #     best_withheld_acc = withheld_acc
-        #     best_state = { ... }
-        #     patience_counter = 0
-        # else:
-        #     patience_counter += 1
-        # if patience_counter >= early_stopping_patience:
-        #     print(f"Early stopping at epoch {e}")
-        #     break
+        # Print metrics including learning rate
+        print(f'Epoch {e:02d}: loss {loss:.4f}, val loss {val_loss:.4f}, train acc {training_acc:.4f}, '
+              f'valid acc {withheld_acc:.4f}, lr {current_lr:.6f} ({toc():.2f}s), best {best_state["acc"]:.4f}')
+
+        # Early stopping check
+        if patience_counter >= early_stopping_patience:
+            print(f"Early stopping at epoch {e}")
+            break
+
         # Clear cache periodically
         if e % 5 == 0:
             torch.cuda.empty_cache()
@@ -625,28 +627,28 @@ def go(name='dmg777k',patience=10, lr=0.005, wd=5e-2, l2=5e-2, epochs=500, prune
         save_path = Path(cache_dir) / f'best_model_{name}.pt'
         torch.save(best_state, save_path)
         print(f'\nBest model saved (epoch {best_state["epoch"]}, '
-              f'acc {best_state["acc"]:.4f})')
+              f'acc {best_state["acc"]:.4f}) to {save_path}')
 
     return best_withheld_acc
 
-if __name__=="__main__":
+if __name__ == "__main__":
     go(
-    name='dmg777k',
-    patience=5,  # Scheduler patience
-    lr=0.01,   # Adjusted
-    wd=0.005,
-    l2=0.005,     # Adjusted
-    epochs=500,
-    prune=True,
-    optimizer='adamw',
-    final=False,
-    emb=16,
-    dropout_general=0.1,  # Adjusted
-    dropout_feature=0.1,  # Adjusted
-    label_smoothing=0.6,
-    bases=40,
-    cache_dir='/content/drive/MyDrive/EmbeddingCache',
-    imagebatch=8,
-    stringbatch=5_000,
-    printnorms=None
-)
+        name='dmg777k',
+        patience=20,  # Scheduler patience
+        lr=0.01,     # Adjusted
+        wd=0.005,
+        l2=0.005,    # Adjusted
+        epochs=1000,
+        prune=True,
+        optimizer='adamw',
+        final=False,
+        emb=16,
+        dropout_general=0.1,  # Adjusted
+        dropout_feature=0.1,  # Adjusted
+        label_smoothing=0.6,
+        bases=40,
+        cache_dir='/content/drive/MyDrive/EmbeddingCache',
+        imagebatch=8,
+        stringbatch=5_000,
+        printnorms=None
+    )
